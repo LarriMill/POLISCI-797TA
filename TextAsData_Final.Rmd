@@ -1,0 +1,159 @@
+---
+title: "Final project visuals/ supplemental work"
+output: html_notebook
+---
+```{r}
+library(tidytext)
+library(plyr)
+library(tidyverse)
+library(quanteda)
+library(stm)
+```
+
+ADDING INFLUENCERS
+```{r}
+tweets <- read.csv("SharpieGate.csv")
+```
+
+adding influencer status based on separate network degree distribution analysis - yes I know this is ugly
+
+```{r}
+tweets_influence <- mutate(tweets, influencer = ifelse((screen_name == "zoetillman" | screen_name == "weareoversight" | screen_name == "tpm" | screen_name == "tomryanlaw" | screen_name == "tomcoates" | screen_name == "tierney_megan" | screen_name =="thedailybeast"| screen_name =="stephenglahn"| screen_name =="shirleyragsdale|" | screen_name =="shamellakin" | screen_name =="safetypindaily"| screen_name =="quad_finn"| screen_name =="ourdailyplanet"| screen_name =="nytimes"| screen_name =="nicolevaldestv"| screen_name =="nickmartin"| screen_name =="nharpermn"| screen_name =="myrt1717"| screen_name =="mog7546"| screen_name =="mehdirhasan"| screen_name =="marcacaputo"| screen_name =="lawcrimenews"| screen_name =="kyletrouble"| screen_name =="kpolantz"| screen_name =="klasfeldreports"| screen_name =="kimzetter"| screen_name =="karolcummins"| screen_name =="jrubinblogger"| screen_name =="joshtpm"| screen_name =="jordanchariton"| screen_name =="jo_williams5"| screen_name =="jennafifield"| screen_name =="hkrassentstein"| screen_name =="gottalaff"| screen_name =="girlwithbliss1"| screen_name =="girlsreallyrule" | screen_name =="gigwc" | screen_name =="ellisd69"| screen_name =="democracydocket"| screen_name =="deanobeidallah"| screen_name =="ctrevornelson" | screen_name == "craignewman" | screen_name =="copingmama" | screen_name =="cisakrebs"| screen_name =="bweglarczyk"| screen_name =="brooklynmarie"| screen_name =="brahmresnik"| screen_name =="bilancieri"| screen_name =="arizonaslaw"| screen_name =="anons_daddyo"| screen_name =="anjilloflight_"| screen_name =="alanfeuer"), 1, 0))
+
+write.csv(tweets_influence, "tweets_influence.csv")
+```
+
+
+REPRESENTING TEXT
+```{r}
+tweets_corpus <- corpus(tweets_influence$text, docnames = tweets_influence$status_id)
+tweets_corpus <- iconv(tweets_corpus, from = "UTF-8", to = "ASCII", sub = " ")
+tweets_summary <- summary(tweets_corpus)
+tweets_summary
+```
+
+```{r}
+tweets_dfm <- dfm(tweets_corpus,
+                   tolower = TRUE,
+                   remove_punct = TRUE,
+                   remove_symbols = TRUE,
+                   remove_url = TRUE,
+                   stem = FALSE, #decided NOT to stem
+                   remove = stopwords("english"))
+tweets_dfm <- dfm_remove(tweets_dfm, "sharpiegate")
+tweets_dfm <- dfm_remove(tweets_dfm, "#sharpiegate")
+tweets_dfm
+```
+
+```{r}
+topfeatures(tweets_dfm, 20)
+
+textplot_wordcloud(tweets_dfm, min_count = 150, random_order = FALSE)
+```
+
+updating dfm to more commonly used terms
+```{r}
+smaller_dfm <- dfm_trim(tweets_dfm, min_termfreq = 10)
+smaller_dfm <- dfm_trim(smaller_dfm, min_docfreq = 0.1, docfreq_type = "prop")
+smaller_dfm
+
+textplot_wordcloud(smaller_dfm, min_count = 50, random_order = FALSE)
+```
+
+feature co-occurence matrix
+```{r}
+smaller_dfm <- dfm_trim(tweets_dfm, min_termfreq = 10)
+smaller_dfm <- dfm_trim(smaller_dfm, min_docfreq = 0.1, docfreq_type = "prop")
+
+smaller_fcm <- fcm(smaller_dfm)
+
+# pull the top features
+myFeatures <- names(topfeatures(smaller_fcm, 30))
+
+# retain only those top features as part of our matrix
+even_smaller_fcm <- fcm_select(smaller_fcm, pattern = myFeatures, selection = "keep")
+
+# check dimensions
+dim(even_smaller_fcm)
+
+# compute size weight for vertices in network
+size <- log(colSums(even_smaller_fcm))
+
+# create plot
+textplot_network(even_smaller_fcm, vertex_size = size / max(size) * 3)
+```
+
+TOPIC MODELLING
+finding and removing blank docs in my data - based on code from Steve
+```{r}
+blank_dfm_docs = dfm_subset(dfm_sharpie,
+                            ntoken(dfm_sharpie) == 0)
+
+if (nrow(blank_dfm_docs@docvars) > 0) {
+  print(paste('removing', nrow(blank_dfm_docs@docvars),
+              'blank rows from dfm, IDs:'))
+  blank_dfm_docs@docvars$status_id
+  
+  preserved_blanks <- tweets_influence %>%
+    filter(status_id %in% blank_dfm_docs@docvars$docid_)
+  tweets_influence <- tweets_influence %>%
+    filter(!status_id %in% blank_dfm_docs@docvars$docid_)
+  
+  dfm_sharpie <- 
+    dfm_subset(dfm_sharpie,
+               ntoken(dfm_sharpie) > 0)
+}
+dim(dfm_sharpie)
+```
+
+trying 9 topics based on Doug's suggestion
+```{r}
+cor_topic_model <- stm(dfm_sharpie, K = 9, verbose = FALSE, init.type = "Spectral")
+```
+
+```{r}
+labelTopics(cor_topic_model)
+```
+
+```{r}
+findThoughts(cor_topic_model,
+             texts = tweets_influence$text,
+             topics = c(1:9),
+             n = 5)
+```
+
+incorporating influencer variable
+```{r}
+k <- 9
+
+myModel <- stm(dfm_sharpie,
+               K = k,
+               prevalence =~ tweets_influence$influencer,
+               max.em.its = 1000,
+               seed = 1234,
+               init.type = "Spectral")
+```
+
+```{r}
+labelTopics(myModel)
+```
+
+```{r}
+plot(myModel, type = "summary")
+```
+
+```{r}
+myTopicNames <- labelTopics(myModel, n=5)$frex
+
+# set up an empty vector
+myTopicLabels <- rep(NA, k)
+
+# set up a loop to go through the topics and collapse the words to a single name
+for (i in 1:k){
+	myTopicLabels[i] <- paste(myTopicNames[i,], collapse = "_")
+}
+
+# print the names
+myTopicLabels
+```
+
