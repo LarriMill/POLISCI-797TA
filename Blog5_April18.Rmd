@@ -1,0 +1,208 @@
+---
+title: "Blog5_April18"
+author: "Larri Miller"
+date: "4/17/2021"
+output: html_document
+---
+
+Time to dig in to Topic Modeling! My overarching goal is to see how influencers shift the conversation. I haven't identified influencers yet (that will be done in my social networks class, and yes, I am behind) but in this blog post I want to get a working script that will pick out topics in my dataset. That way I can just add in a binary variable once influencers have been identified and have the topic modeling already prepped.
+
+Let's try LDA first. I'm loading in my tokenized doc that I saved from last blog:
+```{r}
+tokens <- readRDS("SharpieTokens.rds")
+```
+
+```{r}
+library(text2vec)
+head(tokens, 10)
+```
+
+can I just skip to vocabulary since what I have is already tokenized? Let's try
+```{r}
+v <- create_vocabulary(tokens)
+v
+```
+
+Oh, weird. It's not showing term counts, which seems like it would be a problem. I'm going to try the dfm that I created previously and actually run the token iterater to see if that changes it.
+```{r}
+dfm <- readRDS("SharpieDFM.rds")
+head(dfm, 10)
+```
+
+```{r eval = FALSE}
+tokens <- word_tokenizer(dfm)
+```
+
+Okay,this gives me "error: vector memory exhausted (limit reached?)". My guess is that my current dfm -- 950,414,257 elements taking up 44.5 MB-- is too much for this to handle.
+
+I talked to Doug, and he recommended that I skip LDA because text2vec is finnicky. I'm going to skip to Structural Topic Models instead, starting with my precreated dfm.
+
+```{r}
+# install.packages("stm")
+library(stm)
+library(quanteda)
+```
+
+```{r eval = FALSE}
+cor_topic_model <- stm(dfm, K = 5, verbose = FALSE, init.type = "Spectral")
+```
+I'm getting an error that reads "Error in project[basis, ] <- 0: incorrect number of subscripts on matrix"
+
+Looking up the function documentation:
+```{r}
+?stm
+```
+
+Seems like maybe I need to specify what it should be looking for in the dfm...
+```{r eval = FALSE}
+cor_topic_model <- stm(dfm$features, K = 5, verbose = FALSE, init.type = "Spectral")
+```
+Nope, that gave me "Error in UseMethod("asSTMCorpus"): no applicable method for 'asSTMCorpus' applied to an object of class "NULL"" so clearly dfm$features didn't help. I'm beginning to wonder if I've done something weird when saving the DFM, so I'm going to retrace my steps and start over from my saved corpus file.
+
+```{r}
+library(tidytext)
+library(plyr)
+library(tidyverse)
+library(quanteda)
+
+corpus <- readRDS("SharpieCorpus.rds")
+```
+
+Now recreating the dfm with the edits I figured out last blog post:
+```{r eval = FALSE}
+dfm <- dfm(corpus,
+           tolower = TRUE,
+           remove_punct = TRUE,
+           stem = TRUE,
+           remove = stopwords("english"),
+           remove_symbols = TRUE,
+           remove_url = TRUE)
+
+topfeatures(dfm, 50)
+```
+
+Removing non-ASCII features:
+```{r}
+dfm <- iconv(dfm, from = "UTF-8", to = "ASCII", sub = " ")
+class(dfm)
+```
+
+Okay, this is where the problem is-- iconv() seems to change my object from dfm to character. Can I try just... running the dfm function again?
+```{r eval = FALSE}
+sharpie_dfm <- dfm(dfm)
+```
+
+I got the error message "no loop for break/next, jumping to top level" so that doesn't seem to work. What if I use the inconv() function... before turning my corpus into a dfm? Let's try.
+```{r}
+sharpie_corpus <- iconv(corpus, from = "UTF-8", to = "ASCII", sub = " ")
+class(sharpie_corpus)
+head(sharpie_corpus, 25)
+```
+Okay, using iconv() didn't change the corpus class, and I'm not seeing any non-ASCII characters. Let's try converting to dfm using the dfm code chunk above:
+```{r}
+dfm_sharpie <- dfm(sharpie_corpus,
+                   tolower = TRUE,
+                   remove_punct = TRUE,
+                   remove_symbols = TRUE,
+                   remove_url = TRUE,
+                   stem = FALSE, #decided NOT to stem
+                   remove = stopwords("english"))
+dfm_sharpie <- dfm_remove(dfm_sharpie, "sharpiegate") #removing the word sharpiegate since every tweet would have that
+class(dfm_sharpie)
+```
+Perfect. My object is, finally (after 111 lines), a dfm with no non-ASCII characters. Fingers crossed that I can move on to a Structural Topic Model. I'm starting with a k value of 5 and will play around with it more later.
+
+```{r}
+cor_topic_model <- stm(dfm_sharpie, K = 5, verbose = FALSE, init.type = "Spectral")
+```
+
+YES. Moving to the next steps:
+```{r}
+labelTopics(cor_topic_model)
+```
+
+```{r}
+?findThoughts
+```
+Okay the "texts" arg of the above function says "A character vector where each entry contains the text of a document. Must be in the same order as the documents object. NOTE: This is not the documents which are passed to stm and come out of prepDocuments, this is the actual text of the document." It seems like I need to load in my twitter dataset and indicate the text variable, so I'm going to try that.
+```{r}
+tweets <- read.csv("SharpieGate.csv")
+```
+
+``` {r eval = FALSE}
+findThoughts(cor_topic_model,
+             texts = tweets$text,
+             topics = c(1:5),
+             n = 1)
+```
+Nope, got an error that says "number of provided texts and number of documents modeled do not match". But I'm going to skip this for now, anyways.
+
+Starting with 5 topics, will adjust later:
+```{r eval = FALSE}
+k <- 5
+
+myModel <- stm(dfm_sharpie,
+               K = k,
+               prevalence =~ sentiment,
+               data = tweets,
+               max.em.its = 1000,
+               seed = 1234,
+               init.type = "Spectral")
+```
+Error: "Error creating model matrix. This could be caused by many things including explicit calls to a namespace within the formula. Try a simpler formula."
+
+Well, I don't quite know what a simpler formula would be, so lets just remove prevalance.
+```{r}
+k <- 5
+
+myModel <- stm(dfm_sharpie,
+               K = k,
+               data = tweets,
+               max.em.its = 1000,
+               seed = 1234,
+               init.type = "Spectral")
+```
+```{r}
+labelTopics(myModel)
+```
+
+```{r}
+plot(myModel, type = "summary") # change to FREX 
+```
+^ normalizing for # docs, average words per topic across docs
+```{r}
+myTopicNames <- labelTopics(myModel, n=4)$frex
+
+myTopicLabels <- rep(NA, k)
+
+for (i in 1:k){
+  myTopicLabels[i] <- paste(myTopicNames[i,], collapse = "_")
+}
+
+myTopicLabels
+```
+Well, I'm not really sure how to interpret those labels. I also just picked k = 5 based on the tutorials, so I can try the searchK() function:
+```{r}
+differentKs <- searchK(dfm_sharpie,
+                       K = c(5,25,50),
+                       N=250,
+                       data = tweets,
+                       max.em.its = 1000,
+                       init.type = "Spectral")
+
+plot(differentKs)
+```
+Wow, those axes should not be in the negatives. Trying much smaller numbers now.
+```{r}
+differentKs <- searchK(dfm_sharpie,
+                       K = c(3, 6, 9),
+                       N=250,
+                       data = tweets,
+                       max.em.its = 1000,
+                       init.type = "Spectral")
+
+plot(differentKs)
+```
+
+# use influencer indicator, time stamp in prevalance formula in STM
+# look at topics that influencers focused in on --> from that, look at temporal changes (how is attention shifting over time, how does influencer)
