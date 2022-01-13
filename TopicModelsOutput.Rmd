@@ -1,0 +1,180 @@
+---
+title: "SharpieGate_TopicModelling"
+author: "Larri Miller"
+date: "4/27/2021"
+output: html_document
+---
+topic modelling
+```{r}
+library(tidytext)
+library(plyr)
+library(tidyverse)
+library(quanteda)
+library(stm)
+```
+
+```{r}
+tweets <- read.csv("SharpieGate.csv")
+```
+
+adding influencer status - yes I know this is ugly
+
+```{r}
+tweets_influence <- mutate(tweets, influencer = ifelse((screen_name == "zoetillman" | screen_name == "weareoversight" | screen_name == "tpm" | screen_name == "tomryanlaw" | screen_name == "tomcoates" | screen_name == "tierney_megan" | screen_name =="thedailybeast"| screen_name =="stephenglahn"| screen_name =="shirleyragsdale|" | screen_name =="shamellakin" | screen_name =="safetypindaily"| screen_name =="quad_finn"| screen_name =="ourdailyplanet"| screen_name =="nytimes"| screen_name =="nicolevaldestv"| screen_name =="nickmartin"| screen_name =="nharpermn"| screen_name =="myrt1717"| screen_name =="mog7546"| screen_name =="mehdirhasan"| screen_name =="marcacaputo"| screen_name =="lawcrimenews"| screen_name =="kyletrouble"| screen_name =="kpolantz"| screen_name =="klasfeldreports"| screen_name =="kimzetter"| screen_name =="karolcummins"| screen_name =="jrubinblogger"| screen_name =="joshtpm"| screen_name =="jordanchariton"| screen_name =="jo_williams5"| screen_name =="jennafifield"| screen_name =="hkrassentstein"| screen_name =="gottalaff"| screen_name =="girlwithbliss1"| screen_name =="girlsreallyrule" | screen_name =="gigwc" | screen_name =="ellisd69"| screen_name =="democracydocket"| screen_name =="deanobeidallah"| screen_name =="ctrevornelson" | screen_name == "craignewman" | screen_name =="copingmama" | screen_name =="cisakrebs"| screen_name =="bweglarczyk"| screen_name =="brooklynmarie"| screen_name =="brahmresnik"| screen_name =="bilancieri"| screen_name =="arizonaslaw"| screen_name =="anons_daddyo"| screen_name =="anjilloflight_"| screen_name =="alanfeuer"), 1, 0))
+
+write.csv(tweets_influence, "tweets_influence.csv")
+```
+
+converting non-ASCII characters -- ignoring this bc it messes up for now
+```{r}
+tweets <- iconv(tweets, from = "UTF-8", to = "ASCII", sub = " ")
+```
+
+creating corpus with doc ids
+```{r}
+corpus <- corpus(tweets_influence$text, docnames = tweets_influence$status_id)
+```
+
+dfm cleaning
+```{r}
+dfm_sharpie <- dfm(corpus,
+                   tolower = TRUE,
+                   remove_punct = TRUE,
+                   remove_symbols = TRUE,
+                   remove_url = TRUE,
+                   stem = FALSE,
+                   remove = stopwords("english"))
+dfm_sharpie <- dfm_remove(dfm_sharpie, "sharpiegate")
+```
+
+Steve's code for finding and removing blank docs
+```{r}
+blank_dfm_docments = dfm_subset(joined_posts_dfm,
+                                ntoken(joined_posts_dfm) == 0)
+if (nrow(blank_dfm_docments@docvars) > 0) {
+  print(paste(“Rmoving”, nrow(blank_dfm_docments@docvars),
+              “blank rows from dfm, IDs:“))
+  blank_dfm_docments@docvars$docid_
+  # For some reason, we have some blank rows in the DFM. delete the
+  # corresponding posts, and then the documents in the dfm.
+  preserved_blank_drm_posts <- joined_posts %>%
+    filter(id %in% blank_dfm_docments@docvars$docid_)
+  joined_posts <- joined_posts %>%
+    filter(!id %in% blank_dfm_docments@docvars$docid_)
+  # H/T Ken Benoit: https://github.com/quanteda/quanteda/issues/1647
+  joined_posts_dfm <-
+    dfm_subset(joined_posts_dfm,
+               ntoken(joined_posts_dfm) > 0)
+}
+dim(joined_posts_dfm)
+```
+
+finding and removing blank docs in my data
+```{r}
+blank_dfm_docs = dfm_subset(dfm_sharpie,
+                            ntoken(dfm_sharpie) == 0)
+
+if (nrow(blank_dfm_docs@docvars) > 0) {
+  print(paste('removing', nrow(blank_dfm_docs@docvars),
+              'blank rows from dfm, IDs:'))
+  blank_dfm_docs@docvars$status_id
+  
+  preserved_blanks <- tweets_influence %>%
+    filter(status_id %in% blank_dfm_docs@docvars$docid_)
+  tweets_influence <- tweets_influence %>%
+    filter(!status_id %in% blank_dfm_docs@docvars$docid_)
+  
+  dfm_sharpie <- 
+    dfm_subset(dfm_sharpie,
+               ntoken(dfm_sharpie) > 0)
+}
+dim(dfm_sharpie)
+```
+
+
+trying 9 topics based on Doug's suggestion
+```{r}
+cor_topic_model <- stm(dfm_sharpie, K = 9, verbose = FALSE, init.type = "Spectral")
+```
+
+```{r}
+labelTopics(cor_topic_model)
+```
+
+```{r}
+findThoughts(cor_topic_model,
+             texts = tweets_influence$text,
+             topics = c(1:9),
+             n = 5)
+```
+
+inocrporating influencer variable
+```{r}
+k <- 9
+
+myModel <- stm(dfm_sharpie,
+               K = k,
+               prevalence =~ tweets_influence$influencer,
+               max.em.its = 1000,
+               seed = 1234,
+               init.type = "Spectral")
+```
+ 
+```{r}
+labelTopics(myModel)
+```
+ 
+```{r}
+plot(myModel, type = "summary")
+```
+
+```{r}
+findThoughts(myModel,
+             texts = tweets_influence$text,
+             topics = c(1:9),
+             n = 5)
+```
+
+
+```{r}
+myTopicNames <- labelTopics(myModel, n=5)$frex
+
+# set up an empty vector
+myTopicLabels <- rep(NA, k)
+
+# set up a loop to go through the topics and collapse the words to a single name
+for (i in 1:k){
+	myTopicLabels[i] <- paste(myTopicNames[i,], collapse = "_")
+}
+
+# print the names
+myTopicLabels
+```
+
+```{r}
+# estimate effects
+modelEffects <- estimateEffect(formula=1:k~influencer, 
+        stmobj = myModel, 
+        metadata = tweets_influence)
+
+# plot effects
+myRows <- 2
+par(mfrow=c(myRows,3), bty="n", lwd=2)
+	plot.estimateEffect(modelEffects, 
+        covariate ="influencer",  
+        xlim=c(-.25,.25), 
+        model = myModel, 
+        topics = modelEffects$topics[2], 
+        method = "difference", 
+        cov.value1 = 1, 
+        cov.value2=0, 
+        main = myTopicLabels[2], 
+        printlegend=F, 
+        linecol="grey26", 
+        labeltype="custom", 
+        verbose.labels=F, 
+        custom.labels=c(""))
+	par(new=F)
+```
+
+
